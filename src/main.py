@@ -1,10 +1,11 @@
 """
-Simulation entry point.
+Simulation entry point — core + satellite topology.
 
 Run with:
     python -m src.main
-    python -m src.main --no-viz         # disable browser visualisation
+    python -m src.main --no-viz
     python -m src.main --routing-strategy geocasting
+    python -m src.main --force-regen
 """
 import logging
 import argparse
@@ -24,18 +25,27 @@ from gradysim.simulator.simulation import SimulationBuilder, SimulationConfigura
 from utils.common.config import (
     COMM_RANGE,
     SIMULATION_DURATION,
-    BASE_GROUND,
-    ENDPOINT_GROUND,
     FLIGHT_ALT,
     SENSOR_POSITIONS,
-    FIXED_UAV_GROUPS,
+    OBSTACLE_CENTER,
+    CORE_RIM_NODES,
+    CORE_HUB_START,
+    CORE_RIM_STARTS,
+    FACE_NAMES,
+    NUM_UAVS,
+    SAT_OUTER_DIST,
+    SENSOR_FIELD_X,
+    SENSOR_FIELD_Y,
+    sat_start,
+    _log_derived,
 )
 
 from src.sensor import Sensor
-from src.uav import make_uav_viz
+from src.uav import make_core_hub, make_core_rim, make_satellite
+
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="GrADySim UAV cluster simulation")
+    parser = argparse.ArgumentParser(description="GrADySim core+satellite UAV simulation")
     parser.add_argument(
         "--no-viz",
         action="store_true",
@@ -46,59 +56,62 @@ def main() -> None:
         "--force-regen",
         action="store_true",
         default=False,
-        help="Force regeneration of sensor positions and cluster waypoints",
+        help="Force regeneration of sensor positions",
     )
     parser.add_argument(
         "--routing-strategy",
         choices=("flooding", "dtn", "geocasting"),
         default="flooding",
-        help="Global UAV routing protocol",
+        help="Global UAV routing protocol (applied to core nodes)",
     )
     args = parser.parse_args()
 
     # ── Simulation config ──────────────────────────────────────────────────
     config  = SimulationConfiguration(duration=SIMULATION_DURATION)
     builder = SimulationBuilder(config)
-    num_uavs = sum(group_size for _, group_size, _, _ in FIXED_UAV_GROUPS)
 
-    logging.info(f"Base:              ({BASE_GROUND[0]:.1f}, {BASE_GROUND[1]:.1f})")
-    logging.info(f"Endpoint:          ({ENDPOINT_GROUND[0]:.1f}, {ENDPOINT_GROUND[1]:.1f})")
+    _log_derived()
+    logging.info(f"Obstacle center:   {OBSTACLE_CENTER}")
     logging.info(f"Sensors placed:    {len(SENSOR_POSITIONS)}")
-    logging.info(f"Route groups:       {[(name, size) for name, size, _, _ in FIXED_UAV_GROUPS]}")
-    logging.info(f"UAVs:              {num_uavs}")
+    logging.info(f"UAVs:              {NUM_UAVS}  (1 hub + {CORE_RIM_NODES} rim + 4 satellites)")
     logging.info(f"Routing strategy:  {args.routing_strategy}")
 
-    # ── Scene bounds for visualisation ────────────────────────────────────
-    if not args.no_viz:
-        padding = 50
-        all_x   = [p[0] for p in SENSOR_POSITIONS.values()] + [BASE_GROUND[0], ENDPOINT_GROUND[0]]
-        all_y   = [p[1] for p in SENSOR_POSITIONS.values()] + [BASE_GROUND[1], ENDPOINT_GROUND[1]]
-        viz_config = VisualizationConfiguration(
-            x_range      = (min(all_x) - padding, max(all_x) + padding),
-            y_range      = (min(all_y) - padding, max(all_y) + padding),
-            z_range      = (0, FLIGHT_ALT + 20),
-            open_browser = True,
-        )
+    viz = not args.no_viz
 
     # ── Sensors (static nodes) ─────────────────────────────────────────────
     for sensor_pos in SENSOR_POSITIONS.values():
         builder.add_node(Sensor, sensor_pos)
 
-    # ── Fixed UAV patrol groups ───────────────────────────────────────────
-    for group_name, group_size, waypoints, start_position in FIXED_UAV_GROUPS:
-        logging.info(
-            f"{group_name.title()} group: {group_size} UAVs "
-            f"({len(waypoints)} waypoints)"
+    # ── Core hub ───────────────────────────────────────────────────────────
+    HubClass = make_core_hub(routing=args.routing_strategy, viz=viz)
+    logging.info(f"Hub start: {CORE_HUB_START}")
+    builder.add_node(HubClass, CORE_HUB_START)
+
+    # ── Core rim nodes 0..7 ────────────────────────────────────────────────
+    for k in range(CORE_RIM_NODES):
+        RimClass = make_core_rim(k=k, routing=args.routing_strategy, viz=viz)
+        logging.info(f"Rim{k} start: {CORE_RIM_STARTS[k]}")
+        builder.add_node(RimClass, CORE_RIM_STARTS[k])
+
+    # ── Satellites N, E, S, W ─────────────────────────────────────────────
+    for face in FACE_NAMES:
+        SatClass = make_satellite(face=face, viz=viz)
+        start = sat_start(face)
+        logging.info(f"Sat-{face} start: {start}")
+        builder.add_node(SatClass, start)
+
+    # ── Scene bounds for visualisation ────────────────────────────────────
+    if viz:
+        padding = 20
+        # Include the satellite outer turnaround points
+        outer = SAT_OUTER_DIST + 10
+        cx, cy = OBSTACLE_CENTER
+        viz_config = VisualizationConfiguration(
+            x_range=(cx - outer - padding, cx + outer + padding),
+            y_range=(cy - outer - padding, cy + outer + padding),
+            z_range=(0, FLIGHT_ALT + 20),
+            open_browser=True,
         )
-        for cluster_index in range(group_size):
-            UAVClass = make_uav_viz(
-                cluster_index=cluster_index,
-                waypoints=waypoints,
-                group_size=group_size,
-                cyclic=True,
-                routing_strategy=args.routing_strategy,
-            )
-            builder.add_node(UAVClass, start_position)
 
     # ── Handlers ───────────────────────────────────────────────────────────
     builder.add_handler(TimerHandler())
@@ -106,7 +119,7 @@ def main() -> None:
     builder.add_handler(
         CommunicationHandler(CommunicationMedium(transmission_range=COMM_RANGE))
     )
-    if not args.no_viz:
+    if viz:
         builder.add_handler(VisualizationHandler(viz_config))
 
     # ── Run ────────────────────────────────────────────────────────────────
