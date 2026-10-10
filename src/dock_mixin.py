@@ -19,7 +19,6 @@ This mixin must be placed *before* the base protocol in the MRO:
 It requires the host class to have:
     self._core_buffer       — Dict[str, dict]
     self._current_position  — (x, y, z)
-    self._aligned_with(dock_2d) — bool
     self.provider
 """
 import json
@@ -33,7 +32,7 @@ from gradysim.protocol.messages.communication import (
 )
 
 from utils.common.config import (
-    ALIGN_EPS,
+    DOCK_RANGE,
     FACES,
     dock_point_of,
     opposite_face,
@@ -70,7 +69,13 @@ class CoreDockMixin:
     _core_buffer: Dict[str, dict]
     _current_position: tuple
 
-    # _aligned_with() is provided by CoreHubProtocol / CoreRimProtocol via MRO
+    # ── Alignment check (shared by all topologies) ────────────────────────
+
+    def _aligned_with(self, dock_2d: tuple) -> bool:
+        """True when within DOCK_RANGE (2-D distance) of the dock point."""
+        dx = self._current_position[0] - dock_2d[0]
+        dy = self._current_position[1] - dock_2d[1]
+        return math.hypot(dx, dy) <= DOCK_RANGE
 
     # ── Packet handler ────────────────────────────────────────────────────
 
@@ -164,7 +169,7 @@ class CoreDockMixin:
     def handle_telemetry(self, telemetry) -> None:
         super().handle_telemetry(telemetry)
         # On each position update, try to deliver any buffered message whose
-        # destination dock is now within ALIGN_EPS
+        # destination dock is now within DOCK_RANGE
         for face_entry in FACES:
             face_name = face_entry[0]
             dp = face_entry[3]  # 2-D dock point

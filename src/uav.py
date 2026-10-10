@@ -5,10 +5,8 @@ Public API
 ----------
 make_core_hub(routing)      → hub leader class (with viz if enabled)
 make_core_rim(k, routing)   → rim follower class k=0..7 (with viz)
+make_random_uav(routing)    → randomly moving core node (random topology)
 make_satellite(face)        → satellite class for face ∈ {N,E,S,W}
-
-Legacy (unused but left so imports don't break if any test references them):
-    make_uav, make_uav_viz
 """
 from typing import List, Tuple
 
@@ -20,7 +18,9 @@ from utils.viz_templates.constants import VIZ_NODE_SIZE
 from src.core_hub import CoreHubProtocol
 from src.core_rim import make_core_rim_protocol
 from src.dock_mixin import CoreDockMixin
+from src.neighbor_mixin import NeighborMixin
 from src.satellite import make_satellite_protocol
+from src.random_uav import RandomUAVProtocol
 
 from src.flooding_mixin import FloodingMixin
 from src.dtn_mixin import DTNMixin
@@ -102,12 +102,12 @@ def make_core_hub(routing: str = "flooding", viz: bool = False) -> type:
     RoutingMixin = _routing_mixin(routing)
 
     if viz:
-        class _HubViz(HubVizMixin, CoreDockMixin, RoutingMixin, CoreHubProtocol):
+        class _HubViz(HubVizMixin, NeighborMixin, CoreDockMixin, RoutingMixin, CoreHubProtocol):
             pass
         _HubViz.__name__ = f"CoreHub_{routing}_viz"
         return _HubViz
 
-    class _Hub(CoreDockMixin, RoutingMixin, CoreHubProtocol):
+    class _Hub(NeighborMixin, CoreDockMixin, RoutingMixin, CoreHubProtocol):
         pass
     _Hub.__name__ = f"CoreHub_{routing}"
     return _Hub
@@ -124,15 +124,36 @@ def make_core_rim(k: int, routing: str = "flooding", viz: bool = False) -> type:
     BaseRim = make_core_rim_protocol(k)
 
     if viz:
-        class _RimViz(RimVizMixin, CoreDockMixin, RoutingMixin, BaseRim):
+        class _RimViz(RimVizMixin, NeighborMixin, CoreDockMixin, RoutingMixin, BaseRim):
             pass
         _RimViz.__name__ = f"CoreRim{k}_{routing}_viz"
         return _RimViz
 
-    class _Rim(CoreDockMixin, RoutingMixin, BaseRim):
+    class _Rim(NeighborMixin, CoreDockMixin, RoutingMixin, BaseRim):
         pass
     _Rim.__name__ = f"CoreRim{k}_{routing}"
     return _Rim
+
+
+def make_random_uav(routing: str = "flooding", viz: bool = False) -> type:
+    """
+    Return a randomly moving core node class (random topology).
+
+    MRO (most-derived first):
+        [RimVizMixin,] CoreDockMixin, RoutingMixin, RandomUAVProtocol
+    """
+    RoutingMixin = _routing_mixin(routing)
+
+    if viz:
+        class _RandViz(RimVizMixin, NeighborMixin, CoreDockMixin, RoutingMixin, RandomUAVProtocol):
+            pass
+        _RandViz.__name__ = f"RandomUAV_{routing}_viz"
+        return _RandViz
+
+    class _Rand(NeighborMixin, CoreDockMixin, RoutingMixin, RandomUAVProtocol):
+        pass
+    _Rand.__name__ = f"RandomUAV_{routing}"
+    return _Rand
 
 
 def make_satellite(face: str, viz: bool = False) -> type:
@@ -150,23 +171,3 @@ def make_satellite(face: str, viz: bool = False) -> type:
         return _SatViz
 
     return BaseSat
-
-
-# ---------------------------------------------------------------------------
-# Legacy stubs (kept to avoid import errors in old tests)
-# ---------------------------------------------------------------------------
-
-def make_uav(cluster_index: int = 0, waypoints=None, group_size=None,
-             cyclic: bool = True, routing_strategy: str = "flooding") -> type:
-    """Deprecated — returns a core hub for backward compat."""
-    import warnings
-    warnings.warn("make_uav is deprecated; use make_core_hub/rim/satellite", DeprecationWarning)
-    return make_core_hub(routing_strategy)
-
-
-def make_uav_viz(cluster_index: int = 0, waypoints=None, group_size=None,
-                 cyclic: bool = True, routing_strategy: str = "flooding") -> type:
-    """Deprecated — returns a core hub viz for backward compat."""
-    import warnings
-    warnings.warn("make_uav_viz is deprecated; use make_core_hub/rim/satellite", DeprecationWarning)
-    return make_core_hub(routing_strategy, viz=True)

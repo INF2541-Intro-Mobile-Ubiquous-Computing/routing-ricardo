@@ -32,9 +32,8 @@ from utils.common.config import (
     CORE_RADIUS,
     CORE_RIM_NODES,
     CORE_SPIN_DT,
-    CORE_FOLLOW_SPEED,
-    ALIGN_EPS,
     FLIGHT_ALT,
+    UAV_SPEED,
     dock_point_of,
 )
 from utils.common.agent_types import AgentType
@@ -88,7 +87,7 @@ def make_core_rim_protocol(k: int) -> type:
             ))
 
             # Set speed once
-            self.provider.send_mobility_command(SetSpeedMobilityCommand(CORE_FOLLOW_SPEED))
+            self.provider.send_mobility_command(SetSpeedMobilityCommand(UAV_SPEED))
 
             # ── Core message buffer ────────────────────────────────────
             self._core_buffer: Dict[str, dict] = {}
@@ -183,46 +182,6 @@ def make_core_rim_protocol(k: int) -> type:
                 "position": list(self._current_position),
             })
             self.provider.send_communication_command(BroadcastMessageCommand(msg))
-
-        # ── Alignment check ────────────────────────────────────────────
-
-        def _aligned_with(self, dock_2d: tuple) -> bool:
-            """
-            True when this rim node is angularly aligned with the dock point,
-            i.e. the vector from hub-center to this node points in the same
-            direction as the vector from hub-center to the dock point, within
-            an angular threshold of ALIGN_EPS / CORE_RADIUS radians.
-
-            This is the correct check because:
-              - Rim nodes orbit at CORE_RADIUS (29.25 m).
-              - Dock points are at DOCK_RADIUS (34.25 m).
-              - Geometric distance rim→dock when aligned = DOCK_RADIUS - CORE_RADIUS = 5 m.
-              - But ALIGN_EPS (3 m) is a radial arc tolerance, not a point distance.
-            """
-            lp = self._follower.current_leader_position
-            if lp is None:
-                return False
-            # Hub center (use leader position)
-            hx, hy = lp[0], lp[1]
-            # Vector from hub to this rim node
-            rx = self._current_position[0] - hx
-            ry = self._current_position[1] - hy
-            r = math.sqrt(rx * rx + ry * ry)
-            if r < 0.1:
-                return False
-            # Unit vector from hub toward this rim node
-            ux, uy = rx / r, ry / r
-            # Vector from hub toward the dock point
-            dx = dock_2d[0] - hx
-            dy = dock_2d[1] - hy
-            d = math.sqrt(dx * dx + dy * dy)
-            if d < 0.1:
-                return False
-            vx, vy = dx / d, dy / d
-            # Arc distance (dot product → angle → arc at CORE_RADIUS)
-            dot = max(-1.0, min(1.0, ux * vx + uy * vy))
-            arc = math.acos(dot) * CORE_RADIUS
-            return arc <= ALIGN_EPS
 
         # ── Acceptance sample (rim 0 only) ─────────────────────────────
 

@@ -13,7 +13,7 @@ from utils.common.sensor_positions import (
 # ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
-SIMULATION_DURATION = 300           # seconds — one satellite cycle ~22 s
+SIMULATION_DURATION = 300         # seconds — one satellite cycle ~22 s
 
 # ---------------------------------------------------------------------------
 # Communication
@@ -32,6 +32,7 @@ MAX_BUFFER_SIZE = 100
 # ---------------------------------------------------------------------------
 FLIGHT_ALT = 15.0
 PASS_ALT_OFFSET = 5.0
+UAV_SPEED = 5                       # m/s — movement speed shared by all moving UAVs
 
 # ---------------------------------------------------------------------------
 # Sensor
@@ -60,7 +61,6 @@ ROT_RATE_DEG = 6.0                  # deg/s counter-clockwise
 CORE_INITIAL_ORIENTATION_DEG = 0.0
 
 CORE_SPIN_DT = 0.05                 # seconds between orientation updates
-CORE_FOLLOW_SPEED = 10.0            # m/s for rim goto (>> tangential speed)
 CORE_BROADCAST_INTERVAL = 0.1      # leader position broadcast period
 
 # ---------------------------------------------------------------------------
@@ -69,14 +69,12 @@ CORE_BROADCAST_INTERVAL = 0.1      # leader position broadcast period
 DOCK_GAP = 5.0                      # metres from rim outer perimeter
 DOCK_RADIUS = CORE_RADIUS + DOCK_GAP  # = 34.25 m
 
-ALIGN_EPS = 3.0                     # metres — "aligned" threshold
-
 # ---------------------------------------------------------------------------
 # Satellite
 # ---------------------------------------------------------------------------
-SAT_SPEED = 5.0                     # m/s
 SAT_OUTER_DIST = 90.0               # distance from center to turnaround point
 EXCHANGE_TIMEOUT = 1.0              # seconds
+NEIGHBOR_TIMEOUT = 1.0              # seconds before a neighbor is considered stale
 
 # ---------------------------------------------------------------------------
 # Obstacle (dock points must lie on faces)
@@ -94,6 +92,22 @@ OBSTACLE_ZONE = ForbiddenZone(
     y_min=OBSTACLE_CENTER[1] - OBSTACLE_HALF_H,
     y_max=OBSTACLE_CENTER[1] + OBSTACLE_HALF_H,
 )
+
+# ---------------------------------------------------------------------------
+# Random topology (--topology random)
+# ---------------------------------------------------------------------------
+NUM_RANDOM_UAVS = 9                 # UAVs roaming inside the obstacle zone
+RANDOM_SEED = 2056                  # seeds start positions and random waypoints
+DOCK_RANGE = COMM_RANGE             # 'aligned' = within this 2-D distance of a dock point
+RANDOM_X_RANGE = (OBSTACLE_ZONE.x_min, OBSTACLE_ZONE.x_max)
+RANDOM_Y_RANGE = (OBSTACLE_ZONE.y_min, OBSTACLE_ZONE.y_max)
+
+# ---------------------------------------------------------------------------
+# Routing Protocol Parameters
+# ---------------------------------------------------------------------------
+DTN_SESSION_COOLDOWN = 3.0          # seconds between epidemic sessions
+DTN_MAX_HOPS = 6                    # max copies/hops for DTN routing
+GEOCAST_REGION_RADIUS = DOCK_RANGE  # region radius for geocasting
 
 # ---------------------------------------------------------------------------
 # Derived geometry — logged at startup
@@ -169,6 +183,15 @@ def _rim_start(k: int):
     )
 
 CORE_RIM_STARTS = [_rim_start(k) for k in range(CORE_RIM_NODES)]
+
+def random_uav_starts(n: int = NUM_RANDOM_UAVS, seed: int = RANDOM_SEED):
+    """Seeded random start positions inside the obstacle zone at FLIGHT_ALT."""
+    from random import Random
+    rng = Random(seed)
+    return [
+        (rng.uniform(*RANDOM_X_RANGE), rng.uniform(*RANDOM_Y_RANGE), FLIGHT_ALT)
+        for _ in range(n)
+    ]
 
 # ---------------------------------------------------------------------------
 # Satellite start positions (= dock points at FLIGHT_ALT)
@@ -265,8 +288,3 @@ SENSORS_HOVER = {
 }
 
 SENSOR_WAYPOINT_NAMES = list(SENSORS_HOVER.keys())
-
-# ---------------------------------------------------------------------------
-# Kept for compatibility (sensor_template imports these)
-# ---------------------------------------------------------------------------
-UAV_SPEED = SAT_SPEED               # satellites use this concept

@@ -1,105 +1,174 @@
 """
-DTN mixin for core nodes — bounded epidemic routing.
+DTN mixin for core nodes — Epidemic Routing (Vahdat & Becker, 2000).
 
-Adapted from the original DTNMixin to:
-- Work with the dock-based message model (dest_face).
-- Override route_in_core() to store and rebroadcast dock_data messages.
-- Ignore raw sensor packets (satellites handle collection).
+- Nodes maintain a bounded buffer (_core_buffer).
+- When encountering a new peer (via beacon), the lower-ID node initiates
+  an anti-entropy session by sending its summary vector.
+- Peers exchange missing messages.
+- Messages that reach DTN_MAX_HOPS are excluded from routing.
 """
 import json
-from typing import Dict
+import logging
+from typing import Dict, List
 
-from gradysim.protocol.messages.communication import BroadcastMessageCommand
+from gradysim.protocol.messages.communication import SendMessageCommand
+from utils.common.config import MAX_BUFFER_SIZE, DTN_SESSION_COOLDOWN, DTN_MAX_HOPS
 
-from utils.common.agent_types import AgentType
-from utils.common.config import MAX_BUFFER_SIZE
-from src.dock_mixin import MSG_DOCK_DATA
-
+MSG_DTN_SUMMARY = "dtn_summary"
+MSG_DTN_REQUEST = "dtn_request"
+MSG_DTN_DATA_REQ = "dtn_data_and_request"
+MSG_DTN_DATA = "dtn_data"
 
 class DTNMixin:
-    """Bounded epidemic routing that retains messages between contacts."""
-
-    routing_msg_type = "routing_dtn"
+    _dtn_last_session: Dict[int, float]
 
     def initialize(self) -> None:
-        super().initialize()
-        self._dtn_buffer: Dict[str, dict] = {}
-        self._dtn_contacts = set()
-        self._routing_sequence = 0
+        if hasattr(super(), "initialize"):
+            super().initialize()
+        self._dtn_last_session = {}
 
-    def _store_dtn(self, message: dict) -> bool:
-        message_id = message.get("id") or message.get("message_id")
-        if not message_id or message_id in self._dtn_buffer:
-            return False
-        if len(self._dtn_buffer) >= MAX_BUFFER_SIZE:
-            self._dtn_buffer.pop(next(iter(self._dtn_buffer)))
-        self._dtn_buffer[message_id] = dict(message)
-        return True
-
-    def _send_dtn(self, message: dict) -> None:
-        self.provider.send_communication_command(
-            BroadcastMessageCommand(json.dumps(message))
-        )
-
-    def _replicate_pending(self) -> None:
-        for message in list(self._dtn_buffer.values()):
-            outgoing = dict(message)
-            outgoing["msg_type"] = self.routing_msg_type
-            outgoing["sender_id"] = self.provider.get_id()
-            outgoing["copies"] = int(outgoing.get("copies", 1)) + 1
-            outgoing["hops"] = int(outgoing.get("hops", 1)) + 1
-            self._send_dtn(outgoing)
+    def _enforce_buffer_limit(self):
+        if not hasattr(self, "_core_buffer"):
+            self._core_buffer = {}
+        while len(self._core_buffer) > MAX_BUFFER_SIZE:
+            # Pop the oldest (first) item
+            self._core_buffer.pop(next(iter(self._core_buffer)))
 
     def route_in_core(self, msg: dict) -> None:
-        """Store and broadcast dock_data on receipt."""
-        wrapped = dict(msg)
-        wrapped["msg_type"] = self.routing_msg_type
-        wrapped["message_id"] = msg.get("id", "")
-        if self._store_dtn(wrapped):
-            self._send_dtn(wrapped)
+        # CoreDockMixin already put this in _core_buffer. Just enforce limit.
+        self._enforce_buffer_limit()
+
+    def _get_summary_vector(self) -> List[str]:
+        if not hasattr(self, "_core_buffer"):
+            return []
+        sv = []
+        for msg_id, msg in self._core_buffer.items():
+            if msg.get("hops", 1) < DTN_MAX_HOPS:
+                sv.append(msg_id)
+        return sv
+
+    def _get_missing_messages(self, peer_summary: List[str]) -> List[str]:
+        my_sv = set(self._get_summary_vector())
+        return [msg_id for msg_id in peer_summary if msg_id not in my_sv]
+
+    def _get_messages_for_ids(self, requested_ids: List[str]) -> List[dict]:
+        if not hasattr(self, "_core_buffer"):
+            return []
+        msgs = []
+        for msg_id in requested_ids:
+            if msg_id in self._core_buffer:
+                msgs.append(self._core_buffer[msg_id])
+        return msgs
+
+    def _store_dtn_messages(self, messages: List[dict]):
+        if not hasattr(self, "_core_buffer"):
+            self._core_buffer = {}
+        for msg in messages:
+            msg_id = msg.get("id")
+            if msg_id and msg_id not in self._core_buffer:
+                # Increment hops upon receiving
+                new_msg = dict(msg)
+                new_msg["hops"] = new_msg.get("hops", 1) + 1
+                self._core_buffer[msg_id] = new_msg
+        self._enforce_buffer_limit()
 
     def handle_packet(self, message: str) -> None:
         try:
             raw = json.loads(message)
         except json.JSONDecodeError:
-            return super().handle_packet(message)
-
-        # Ignore raw sensor packets
-        if raw.get("sender_type") == AgentType.SENSOR.value:
+            if hasattr(super(), "handle_packet"):
+                super().handle_packet(message)
             return
 
-        if raw.get("msg_type") == self.routing_msg_type:
-            message_id = raw.get("id") or raw.get("message_id")
-            if not message_id:
-                return super().handle_packet(message)
-
-            if self._store_dtn(raw):
-                # Store in _core_buffer too for dock delivery
-                if not hasattr(self, "_core_buffer"):
-                    self._core_buffer = {}
-                if message_id not in self._core_buffer:
-                    entry = {
-                        "id": message_id,
-                        "origin_face": raw.get("origin_face"),
-                        "dest_face": raw.get("dest_face"),
-                        "payload": raw.get("payload", {}),
-                        "created_at": raw.get("created_at", 0.0),
-                        "hops": raw.get("hops", 1) + 1,
-                    }
-                    self._core_buffer[message_id] = entry
-                # Epidemic rebroadcast
-                outgoing = dict(raw)
-                outgoing["sender_id"] = self.provider.get_id()
-                outgoing["copies"] = int(raw.get("copies", 1)) + 1
-                outgoing["hops"] = int(raw.get("hops", 1)) + 1
-                self._send_dtn(outgoing)
+        msg_type = raw.get("msg_type")
+        if msg_type not in (MSG_DTN_SUMMARY, MSG_DTN_REQUEST, MSG_DTN_DATA_REQ, MSG_DTN_DATA):
+            if hasattr(super(), "handle_packet"):
+                super().handle_packet(message)
             return
 
-        return super().handle_packet(message)
+        sender_id = raw.get("sender_id")
+        if sender_id is None:
+            return
+
+        my_id = self.provider.get_id()
+        
+        # 1. Receive dtn_summary (from initiator)
+        if msg_type == MSG_DTN_SUMMARY:
+            peer_summary = raw.get("summary", [])
+            want_ids = self._get_missing_messages(peer_summary)
+            my_sv = self._get_summary_vector()
+            
+            # Send dtn_request
+            reply = {
+                "msg_type": MSG_DTN_REQUEST,
+                "sender_id": my_id,
+                "request": want_ids,
+                "summary": my_sv
+            }
+            self.provider.send_communication_command(SendMessageCommand(json.dumps(reply), sender_id))
+            self._dtn_last_session[sender_id] = self.provider.current_time()
+            return
+
+        # 2. Receive dtn_request (from peer)
+        if msg_type == MSG_DTN_REQUEST:
+            peer_request = raw.get("request", [])
+            peer_summary = raw.get("summary", [])
+            
+            data_to_send = self._get_messages_for_ids(peer_request)
+            want_ids = self._get_missing_messages(peer_summary)
+            
+            reply = {
+                "msg_type": MSG_DTN_DATA_REQ,
+                "sender_id": my_id,
+                "data": data_to_send,
+                "request": want_ids
+            }
+            self.provider.send_communication_command(SendMessageCommand(json.dumps(reply), sender_id))
+            return
+
+        # 3. Receive dtn_data_and_request (from initiator)
+        if msg_type == MSG_DTN_DATA_REQ:
+            data_received = raw.get("data", [])
+            self._store_dtn_messages(data_received)
+            
+            peer_request = raw.get("request", [])
+            if peer_request:
+                data_to_send = self._get_messages_for_ids(peer_request)
+                reply = {
+                    "msg_type": MSG_DTN_DATA,
+                    "sender_id": my_id,
+                    "data": data_to_send
+                }
+                self.provider.send_communication_command(SendMessageCommand(json.dumps(reply), sender_id))
+            return
+
+        # 4. Receive dtn_data (from peer)
+        if msg_type == MSG_DTN_DATA:
+            data_received = raw.get("data", [])
+            self._store_dtn_messages(data_received)
+            return
 
     def handle_telemetry(self, telemetry) -> None:
-        self._current_position = tuple(telemetry.current_position)
-        super().handle_telemetry(telemetry)
-
-    def finish(self) -> None:
-        super().finish()
+        if hasattr(super(), "handle_telemetry"):
+            super().handle_telemetry(telemetry)
+        
+        my_id = self.provider.get_id()
+        current_time = self.provider.current_time()
+        
+        # Initiate sessions with fresh neighbors
+        if hasattr(self, "fresh_neighbors"):
+            neighbors = self.fresh_neighbors()
+            for nid in neighbors:
+                # Lower ID initiates
+                if my_id < nid:
+                    last_sess = self._dtn_last_session.get(nid, 0.0)
+                    if current_time - last_sess >= DTN_SESSION_COOLDOWN:
+                        self._dtn_last_session[nid] = current_time
+                        msg = {
+                            "msg_type": MSG_DTN_SUMMARY,
+                            "sender_id": my_id,
+                            "summary": self._get_summary_vector()
+                        }
+                        self.provider.send_communication_command(
+                            SendMessageCommand(json.dumps(msg), nid)
+                        )

@@ -6,9 +6,11 @@ Run with:
     python -m src.main --no-viz
     python -m src.main --routing-strategy geocasting
     python -m src.main --force-regen
+    python -m src.main --topology star
 """
 import logging
 import argparse
+import random
 
 from gradysim.simulator.handler.communication import (
     CommunicationHandler,
@@ -33,6 +35,9 @@ from utils.common.config import (
     CORE_RIM_STARTS,
     FACE_NAMES,
     NUM_UAVS,
+    NUM_RANDOM_UAVS,
+    RANDOM_SEED,
+    random_uav_starts,
     SAT_OUTER_DIST,
     SENSOR_FIELD_X,
     SENSOR_FIELD_Y,
@@ -41,7 +46,7 @@ from utils.common.config import (
 )
 
 from src.sensor import Sensor
-from src.uav import make_core_hub, make_core_rim, make_satellite
+from src.uav import make_core_hub, make_core_rim, make_random_uav, make_satellite
 
 
 def main() -> None:
@@ -64,7 +69,17 @@ def main() -> None:
         default="flooding",
         help="Global UAV routing protocol (applied to core nodes)",
     )
+    parser.add_argument(
+        "--topology",
+        choices=("random", "star"),
+        default="random",
+        help=(
+            "random: 9 UAVs moving randomly inside the obstacle area (default); "
+            "star: rotating hub + 8 rim formation"
+        ),
+    )
     args = parser.parse_args()
+    random.seed(RANDOM_SEED)
 
     # ── Simulation config ──────────────────────────────────────────────────
     config  = SimulationConfiguration(duration=SIMULATION_DURATION)
@@ -73,7 +88,12 @@ def main() -> None:
     _log_derived()
     logging.info(f"Obstacle center:   {OBSTACLE_CENTER}")
     logging.info(f"Sensors placed:    {len(SENSOR_POSITIONS)}")
-    logging.info(f"UAVs:              {NUM_UAVS}  (1 hub + {CORE_RIM_NODES} rim + 4 satellites)")
+    if args.topology == "star":
+        logging.info(f"UAVs:              {NUM_UAVS}  (1 hub + {CORE_RIM_NODES} rim + 4 satellites)")
+    else:
+        logging.info(f"UAVs:              {NUM_RANDOM_UAVS + len(FACE_NAMES)}  "
+                     f"({NUM_RANDOM_UAVS} random + {len(FACE_NAMES)} satellites)")
+    logging.info(f"Topology:          {args.topology}")
     logging.info(f"Routing strategy:  {args.routing_strategy}")
 
     viz = not args.no_viz
@@ -82,16 +102,23 @@ def main() -> None:
     for sensor_pos in SENSOR_POSITIONS.values():
         builder.add_node(Sensor, sensor_pos)
 
-    # ── Core hub ───────────────────────────────────────────────────────────
-    HubClass = make_core_hub(routing=args.routing_strategy, viz=viz)
-    logging.info(f"Hub start: {CORE_HUB_START}")
-    builder.add_node(HubClass, CORE_HUB_START)
+    if args.topology == "star":
+        # ── Core hub ───────────────────────────────────────────────────────
+        HubClass = make_core_hub(routing=args.routing_strategy, viz=viz)
+        logging.info(f"Hub start: {CORE_HUB_START}")
+        builder.add_node(HubClass, CORE_HUB_START)
 
-    # ── Core rim nodes 0..7 ────────────────────────────────────────────────
-    for k in range(CORE_RIM_NODES):
-        RimClass = make_core_rim(k=k, routing=args.routing_strategy, viz=viz)
-        logging.info(f"Rim{k} start: {CORE_RIM_STARTS[k]}")
-        builder.add_node(RimClass, CORE_RIM_STARTS[k])
+        # ── Core rim nodes 0..7 ────────────────────────────────────────────
+        for k in range(CORE_RIM_NODES):
+            RimClass = make_core_rim(k=k, routing=args.routing_strategy, viz=viz)
+            logging.info(f"Rim{k} start: {CORE_RIM_STARTS[k]}")
+            builder.add_node(RimClass, CORE_RIM_STARTS[k])
+    else:
+        # ── Random core UAVs roaming inside the obstacle zone ──────────────
+        for i, start in enumerate(random_uav_starts()):
+            RandClass = make_random_uav(routing=args.routing_strategy, viz=viz)
+            logging.info(f"Random{i} start: {start}")
+            builder.add_node(RandClass, start)
 
     # ── Satellites N, E, S, W ─────────────────────────────────────────────
     for face in FACE_NAMES:

@@ -40,7 +40,6 @@ from utils.common.config import (
     CORE_SPIN_DT,
     ROT_RATE_DEG,
     DOCK_RADIUS,
-    ALIGN_EPS,
     FACES,
     FLIGHT_ALT,
     dock_point_of,
@@ -159,16 +158,6 @@ class CoreHubProtocol(IProtocol):
             "position": list(self._current_position),
         })
         self.provider.send_communication_command(BroadcastMessageCommand(msg))
-
-    # ── Alignment check ───────────────────────────────────────────────────
-
-    def _aligned_with(self, dock_2d: tuple) -> bool:
-        """
-        The hub is stationary at the center — it is never physically near
-        a dock point (which is at DOCK_RADIUS from center).  Only rim nodes
-        that have rotated into angular alignment should respond to dock_hello.
-        """
-        return False
 
     # ── finish ────────────────────────────────────────────────────────────
 

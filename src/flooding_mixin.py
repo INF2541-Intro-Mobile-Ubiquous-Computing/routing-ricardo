@@ -23,16 +23,15 @@ class FloodingMixin:
     default_ttl = 8
 
     def initialize(self) -> None:
-        super().initialize()
+        if hasattr(super(), "initialize"):
+            super().initialize()
         self._flood_seen: Set[str] = set()
-        self._routing_sequence = 0
 
     def _flood_message(self, msg: dict, ttl: int = None) -> None:
         """Flood a dock_data-style message through the core."""
         message_id = msg.get("id", "")
         if message_id in self._flood_seen:
             return
-        self._routing_sequence += 1
         flood_msg = {
             "msg_type": self.routing_msg_type,
             "message_id": message_id,

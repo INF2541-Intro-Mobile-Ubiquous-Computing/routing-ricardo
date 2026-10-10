@@ -35,11 +35,10 @@ from gradysim.protocol.messages.mobility import (
 from gradysim.protocol.messages.telemetry import Telemetry
 
 from utils.common.config import (
-    SAT_SPEED,
+    UAV_SPEED,
     SAT_OUTER_DIST,
     DOCK_RADIUS,
     DOCK_GAP,
-    ALIGN_EPS,
     FLIGHT_ALT,
     EXCHANGE_TIMEOUT,
     OBSTACLE_CENTER,
@@ -74,6 +73,7 @@ def make_satellite_protocol(face_name: str) -> type:
     Factory returning a SatelliteProtocol class for the given compass face.
 
     face_name must be one of "N", "E", "S", "W".
+    Satellites move at UAV_SPEED (shared by all UAVs).
     """
     face_entry = FACE_BY_NAME[face_name]
     _face      = face_name
@@ -108,7 +108,7 @@ def make_satellite_protocol(face_name: str) -> type:
             self._dock_count = 0
 
             # Set speed once
-            self.provider.send_mobility_command(SetSpeedMobilityCommand(SAT_SPEED))
+            self.provider.send_mobility_command(SetSpeedMobilityCommand(UAV_SPEED))
 
             # Start first outbound leg
             self._goto_outer()
