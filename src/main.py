@@ -65,7 +65,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--routing-strategy",
-        choices=("flooding", "dtn", "geocasting"),
+        choices=("flooding", "dtn", "geocasting", "swcore"),
         default="flooding",
         help="Global UAV routing protocol (applied to core nodes)",
     )

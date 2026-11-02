@@ -13,6 +13,7 @@ Each run selects one routing protocol globally:
 - `flooding`: broadcasts each routing message once within the core with a strict TTL (8).
 - `dtn`: Epidemic Routing (Vahdat & Becker, 2000). Nodes conduct anti-entropy sessions with peers to exchange missing messages.
 - `geocasting`: GPSR-based geocasting. Greedy geographic forwarding toward the destination dock point, falling back to Perimeter Mode (right-hand rule on a Relative Neighborhood Graph) at local minima, and flooding inside the region (`GEOCAST_REGION_RADIUS`).
+- `swcore`: SWarm Core dynamic distance-vector routing (DSDV-like). Each core node keeps a per-dock-face routing table (next hop, hop count, sequence number). Nodes aligned with a dock originate 0-hop routes, advertise their tables every `SWCORE_ADV_INTERVAL`, and stale routes expire after `SWCORE_ROUTE_TIMEOUT`. Messages are unicast along the table, or held in the core buffer until a route appears.
 
 ## Architecture
 
@@ -75,6 +76,9 @@ A satellite's **opposite face** receives all messages: N↔S, E↔W.
 | `DTN_SESSION_COOLDOWN` | 3.0 s | Cooldown between DTN epidemic sessions |
 | `DTN_MAX_HOPS` | 6 | Max replications for a message in Epidemic Routing |
 | `GEOCAST_REGION_RADIUS` | 30.0 m | Radius for geocast region flooding (= `DOCK_RANGE`) |
+| `SWCORE_ADV_INTERVAL` | 0.25 s | Period of swcore routing-table advertisements |
+| `SWCORE_ROUTE_TIMEOUT` | 1.5 s | Age after which an unrefreshed swcore route expires |
+| `SWCORE_MAX_HOPS` | 8 | Hop limit for swcore forwarding |
 
 Derived values logged at startup:
 - Rim adjacent chord ≈ 22.36 m (< 30 m ✓)
@@ -107,7 +111,7 @@ python -m src.main
 |------|-------------|
 | `--no-viz` | Disable the browser visualisation |
 | `--force-regen` | Force regeneration of sensor positions |
-| `--routing-strategy NAME` | Routing protocol: `flooding`, `dtn`, or `geocasting` (default: `flooding`) |
+| `--routing-strategy NAME` | Routing protocol: `flooding`, `dtn`, `geocasting`, or `swcore` (default: `flooding`) |
 | `--topology NAME` | Core topology: `random` or `star` (default: `random`) |
 
 ### Example runs

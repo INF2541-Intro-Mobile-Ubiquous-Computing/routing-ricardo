@@ -25,12 +25,14 @@ from src.random_uav import RandomUAVProtocol
 from src.flooding_mixin import FloodingMixin
 from src.dtn_mixin import DTNMixin
 from src.geocasting_mixin import GeocastingMixin
+from src.swcore_mixin import SWCoreMixin
 
 
 _ROUTING_MIXINS = {
     "flooding":   FloodingMixin,
     "dtn":        DTNMixin,
     "geocasting": GeocastingMixin,
+    "swcore":     SWCoreMixin,
 }
 
 
