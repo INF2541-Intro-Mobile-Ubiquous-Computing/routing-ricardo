@@ -21,6 +21,7 @@ The satellite never enters the obstacle zone (stays outside dock_radius).
 import json
 import logging
 import math
+import random
 from typing import Dict, Optional, Set
 
 from gradysim.protocol.interface import IProtocol
@@ -42,6 +43,9 @@ from utils.common.config import (
     FLIGHT_ALT,
     EXCHANGE_TIMEOUT,
     OBSTACLE_CENTER,
+    MESSAGE_DEST_MODE,
+    RANDOM_SEED,
+    FACE_NAMES,
     dock_point_of,
     opposite_face,
     FACE_BY_NAME,
@@ -52,8 +56,12 @@ from src.dock_mixin import (
     MSG_DOCK_ACK,
     MSG_DOCK_DATA,
     MSG_DOCK_DELIVER,
+    MSG_DOCK_CONNECT,
+    MSG_DOCK_DISCONNECT,
+    MSG_DOCK_MSG_ACK,
     set_docked_sat,
     get_docked_sat,
+    register_sat,
 )
 
 ARRIVAL_RADIUS = 1.5     # metres (2-D) — arrival detection threshold
@@ -68,13 +76,18 @@ ST_WAIT_ALIGN  = "WAIT_ALIGN"
 ST_EXCHANGE    = "EXCHANGE"
 
 
-def make_satellite_protocol(face_name: str) -> type:
+def make_satellite_protocol(face_name: str, swcore: bool = False) -> type:
     """
     Factory returning a SatelliteProtocol class for the given compass face.
 
     face_name must be one of "N", "E", "S", "W".
     Satellites move at UAV_SPEED (shared by all UAVs).
+
+    swcore=True enables the SwCore satellite behaviour (Algorithm 2): explicit
+    connect/disconnect events to the hub and an upload that is kept until the
+    core acknowledges it (retried at the next docking).
     """
+    _swcore = swcore
     face_entry = FACE_BY_NAME[face_name]
     _face      = face_name
     _bearing   = face_entry[1]
@@ -101,6 +114,9 @@ def make_satellite_protocol(face_name: str) -> type:
             # Exchange tracking
             self._ack_node: Optional[int] = None   # rim node that answered ack
             self._delivered_ids: Set[str]  = set()  # dedup delivered messages
+            self._rng = random.Random(RANDOM_SEED + FACE_NAMES.index(_face))
+            self._pending: Optional[dict] = None    # swcore: upload awaiting ack
+            register_sat(_face, self.provider.get_id())
 
             # Metrics
             self._cycle_start_time: float = self.provider.current_time()
@@ -150,8 +166,11 @@ def make_satellite_protocol(face_name: str) -> type:
             if self._wait_start_time is not None:
                 wait_time = self.provider.current_time() - self._wait_start_time
 
+            if _swcore:
+                self._send_to_hub(MSG_DOCK_CONNECT)
+
             # Upload data if any
-            if self.packets:
+            if self.packets or self._pending:
                 self._upload_data(ack_node_id, wait_time)
 
             # Start exchange timeout
@@ -160,6 +179,8 @@ def make_satellite_protocol(face_name: str) -> type:
 
         def _depart(self) -> None:
             """Complete exchange and start next outbound leg."""
+            if _swcore:
+                self._send_to_hub(MSG_DOCK_DISCONNECT)
             set_docked_sat(_face, None)
 
             # Metrics: record dock
@@ -186,27 +207,59 @@ def make_satellite_protocol(face_name: str) -> type:
 
         # ── Data upload ────────────────────────────────────────────────
 
+        def _send_to_hub(self, msg_type: str) -> None:
+            """swcore: unicast a connection event to the node we docked with."""
+            if self._ack_node is None:
+                return
+            msg = json.dumps({
+                "msg_type": msg_type,
+                "face": _face,
+                "sender_id": self.provider.get_id(),
+            })
+            self.provider.send_communication_command(
+                SendMessageCommand(msg, self._ack_node)
+            )
+
+        def _pick_dest(self) -> str:
+            if MESSAGE_DEST_MODE == "opposite":
+                return _opp_face
+            return self._rng.choice([f for f in FACE_NAMES if f != _face])
+
         def _upload_data(self, target_id: int, wait_time: float) -> None:
-            import uuid
-            msg_id = f"sat_{_face}_{self.provider.get_id()}_{self._dock_count}"
-            created_at = self.provider.current_time() - wait_time  # approximate upload time
+            if _swcore and self._pending is not None:
+                # Unacked upload from an earlier docking: same id, merge new packets
+                for sensor, count in self.packets.items():
+                    self._pending["payload"][sensor] = (
+                        self._pending["payload"].get(sensor, 0) + count
+                    )
+                entry = self._pending
+            else:
+                entry = {
+                    "id": f"sat_{_face}_{self.provider.get_id()}_{self._dock_count}",
+                    "dest_face": self._pick_dest(),
+                    "payload": dict(self.packets),
+                    # approximate upload time
+                    "created_at": self.provider.current_time() - wait_time,
+                }
+                if _swcore:
+                    self._pending = entry
 
             payload = json.dumps({
                 "msg_type": MSG_DOCK_DATA,
-                "id": msg_id,
+                "id": entry["id"],
                 "sender_id": self.provider.get_id(),
                 "target_id": target_id,
                 "origin_face": _face,
-                "dest_face": _opp_face,
-                "payload": dict(self.packets),
-                "created_at": created_at,
+                "dest_face": entry["dest_face"],
+                "payload": entry["payload"],
+                "created_at": entry["created_at"],
             })
             self.provider.send_communication_command(
                 SendMessageCommand(payload, target_id)
             )
             logging.info(
                 f"[SAT-{_face}] uploaded dock_data → node {target_id} "
-                f"(msg_id={msg_id}, {len(self.packets)} sensors, dest={_opp_face})"
+                f"(msg_id={entry['id']}, {len(entry['payload'])} sensors, dest={entry['dest_face']})"
             )
 
         # ── Timers ─────────────────────────────────────────────────────
@@ -289,6 +342,12 @@ def make_satellite_protocol(face_name: str) -> type:
                     return  # not for us
                 if self._state == ST_WAIT_ALIGN and self._ack_node is None:
                     self._start_exchange(raw.get("sender_id"))
+                return
+
+            # ── dock_msg_ack — swcore core confirmed our upload ───────
+            if msg_type == MSG_DOCK_MSG_ACK:
+                if self._pending is not None and raw.get("id") == self._pending["id"]:
+                    self._pending = None
                 return
 
             # ── dock_deliver — destination satellite receives data ─────

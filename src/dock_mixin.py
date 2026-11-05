@@ -45,10 +45,24 @@ MSG_DOCK_ACK     = "dock_ack"
 MSG_DOCK_DATA    = "dock_data"
 MSG_DOCK_DELIVER = "dock_deliver"
 BEACON_MSG_TYPE  = "core_beacon"
+# swcore only: explicit connection events and upload acknowledgement
+MSG_DOCK_CONNECT    = "dock_connect"
+MSG_DOCK_DISCONNECT = "dock_disconnect"
+MSG_DOCK_MSG_ACK    = "dock_msg_ack"
 
 # ── Global registry of currently docked satellites ──────────────────────────
 # face_name → satellite_id  (set when dock_data is received, cleared after delivery)
 _DOCKED_SATS: Dict[str, Optional[int]] = {}
+
+# face_name → satellite_id  (set once, when each satellite initializes)
+_SAT_BY_FACE: Dict[str, int] = {}
+
+
+def register_sat(face: str, sat_id: int) -> None:
+    _SAT_BY_FACE[face] = sat_id
+
+def get_sat(face: str) -> Optional[int]:
+    return _SAT_BY_FACE.get(face)
 
 
 def get_docked_sat(face: str) -> Optional[int]:
@@ -145,13 +159,16 @@ class CoreDockMixin:
 
             # Try immediate delivery if we're already aligned with dest face
             dest_dp = dock_point_of(dest_face)
-            if self._aligned_with(dest_dp):
+            if getattr(self, "deliver_on_alignment", True) and self._aligned_with(dest_dp):
                 dest_sat = get_docked_sat(dest_face)
                 if dest_sat is not None:
                     self._deliver_to_sat(dest_face, dest_sat, [entry])
 
             # Route through the core (strategy-specific)
             self.route_in_core(entry)
+            on_upload = getattr(self, "on_dock_upload", None)
+            if on_upload is not None:
+                on_upload(entry)
 
             # Deliver any buffered messages for the origin face (reverse channel)
             self._try_deliver(origin_face, sat_id)
@@ -168,6 +185,8 @@ class CoreDockMixin:
 
     def handle_telemetry(self, telemetry) -> None:
         super().handle_telemetry(telemetry)
+        if not getattr(self, "deliver_on_alignment", True):
+            return  # strategy delivers only through its own routing state
         # On each position update, try to deliver any buffered message whose
         # destination dock is now within DOCK_RANGE
         for face_entry in FACES:

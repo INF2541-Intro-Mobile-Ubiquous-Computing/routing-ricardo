@@ -158,13 +158,14 @@ def make_random_uav(routing: str = "flooding", viz: bool = False) -> type:
     return _Rand
 
 
-def make_satellite(face: str, viz: bool = False) -> type:
+def make_satellite(face: str, viz: bool = False, swcore: bool = False) -> type:
     """
     Return a satellite protocol class for the given face.
 
-    Satellites do NOT use routing mixins.
+    Satellites do NOT use routing mixins; ``swcore`` only enables the
+    connect/disconnect/ack behaviour the SwCore core nodes rely on.
     """
-    BaseSat = make_satellite_protocol(face)
+    BaseSat = make_satellite_protocol(face, swcore=swcore)
 
     if viz:
         class _SatViz(SatVizMixin, BaseSat):

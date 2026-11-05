@@ -108,9 +108,12 @@ RANDOM_Y_RANGE = (OBSTACLE_ZONE.y_min, OBSTACLE_ZONE.y_max)
 DTN_SESSION_COOLDOWN = 3.0          # seconds between epidemic sessions
 DTN_MAX_HOPS = 6                    # max copies/hops for DTN routing
 GEOCAST_REGION_RADIUS = DOCK_RANGE  # region radius for geocasting
-SWCORE_ADV_INTERVAL = 0.25          # seconds between routing-table advertisements
-SWCORE_ROUTE_TIMEOUT = 1.5          # seconds before an unrefreshed route expires
 SWCORE_MAX_HOPS = 8                 # hop limit for swcore forwarding
+
+# ---------------------------------------------------------------------------
+# Messages
+# ---------------------------------------------------------------------------
+MESSAGE_DEST_MODE = "any"           # "any": random other face; "opposite": face across the core
 
 # ---------------------------------------------------------------------------
 # Derived geometry — logged at startup

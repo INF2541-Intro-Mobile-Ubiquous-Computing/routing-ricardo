@@ -13,7 +13,7 @@ Each run selects one routing protocol globally:
 - `flooding`: broadcasts each routing message once within the core with a strict TTL (8).
 - `dtn`: Epidemic Routing (Vahdat & Becker, 2000). Nodes conduct anti-entropy sessions with peers to exchange missing messages.
 - `geocasting`: GPSR-based geocasting. Greedy geographic forwarding toward the destination dock point, falling back to Perimeter Mode (right-hand rule on a Relative Neighborhood Graph) at local minima, and flooding inside the region (`GEOCAST_REGION_RADIUS`).
-- `swcore`: SWarm Core dynamic distance-vector routing (DSDV-like). Each core node keeps a per-dock-face routing table (next hop, hop count, sequence number). Nodes aligned with a dock originate 0-hop routes, advertise their tables every `SWCORE_ADV_INTERVAL`, and stale routes expire after `SWCORE_ROUTE_TIMEOUT`. Messages are unicast along the table, or held in the core buffer until a route appears.
+- `swcore`: SWarm Core routing (see the course paper, Algorithms 1 and 2). Each core node keeps a routing table per satellite: `direct` (docked here), a next-hop core node, or `unreachable`. A satellite connecting to or leaving its hub triggers a `reachable` / `unreachable` RT-update that is flooded over the core (a hub-and-spoke tree in the star topology, radio neighbours in the random one), ordered by a version stamp. Messages follow the table, are delivered when the destination satellite is `direct`, and otherwise wait in the core buffer until a `reachable` update arrives. The hub of the sending satellite acknowledges each upload, and an unacknowledged upload is re-sent at the next docking.
 
 ## Architecture
 
@@ -53,10 +53,10 @@ Each satellite follows a 4-state cycle:
 1. **COLLECT_OUT** – fly to outer turnaround point (`SAT_OUTER_DIST = 90 m`), collecting sensor data.
 2. **COLLECT_IN** – fly back to its dock point (`DOCK_RADIUS = 34.25 m` from center).
 3. **WAIT_ALIGN** – hover at dock, broadcast `dock_hello` every 0.25 s until an aligned core node replies.
-4. **EXCHANGE** – upload packet bundle to the aligned core node; it floods/forwards to the opposite dock;
+4. **EXCHANGE** – upload packet bundle to the aligned core node; it floods/forwards to the destination dock;
    destination satellite receives `dock_deliver`. Timeout = 1 s.
 
-A satellite's **opposite face** receives all messages: N↔S, E↔W.
+Messages can go from any face to any other face (N to S, W or E; W to N, S or E; and so on). With `MESSAGE_DEST_MODE = "any"` (default) each upload picks one of the other three faces at random (seeded by `RANDOM_SEED`); `"opposite"` restores the old N↔S, E↔W behaviour.
 
 ## Key Parameters
 
@@ -76,9 +76,8 @@ A satellite's **opposite face** receives all messages: N↔S, E↔W.
 | `DTN_SESSION_COOLDOWN` | 3.0 s | Cooldown between DTN epidemic sessions |
 | `DTN_MAX_HOPS` | 6 | Max replications for a message in Epidemic Routing |
 | `GEOCAST_REGION_RADIUS` | 30.0 m | Radius for geocast region flooding (= `DOCK_RANGE`) |
-| `SWCORE_ADV_INTERVAL` | 0.25 s | Period of swcore routing-table advertisements |
-| `SWCORE_ROUTE_TIMEOUT` | 1.5 s | Age after which an unrefreshed swcore route expires |
 | `SWCORE_MAX_HOPS` | 8 | Hop limit for swcore forwarding |
+| `MESSAGE_DEST_MODE` | `"any"` | Destination face of each upload: `"any"` other face, or `"opposite"` face |
 
 Derived values logged at startup:
 - Rim adjacent chord ≈ 22.36 m (< 30 m ✓)

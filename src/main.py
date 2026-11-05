@@ -122,7 +122,9 @@ def main() -> None:
 
     # ── Satellites N, E, S, W ─────────────────────────────────────────────
     for face in FACE_NAMES:
-        SatClass = make_satellite(face=face, viz=viz)
+        SatClass = make_satellite(
+            face=face, viz=viz, swcore=args.routing_strategy == "swcore"
+        )
         start = sat_start(face)
         logging.info(f"Sat-{face} start: {start}")
         builder.add_node(SatClass, start)
